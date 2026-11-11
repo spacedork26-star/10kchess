@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>FFA 10k Chess</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: sans-serif; color: white; }
+    #ui { position: fixed; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 10px 15px; border-radius: 8px; pointer-events: none; }
+    canvas { display: block; cursor: grab; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div><strong>FFA Massive Chess</strong></div>
+    <div id="status">Connecting...</div>
+    <div style="font-size: 12px; color: #aaa; margin-top: 4px;">Drag to pan • Click piece then adjacent tile to move</div>
+  </div>
+  <canvas id="game"></canvas>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+
+    let myId = null, myColor = '#fff', boardSize = 100, cooldownMs = 3000;
+    let lastMoveTime = 0;
+    let board = new Map();
+    let selected = null;
+
+    // Camera & Panning
+    const TILE = 32;
+    let camX = 0, camY = 0, isDragging = false, dragStartX = 0, dragStartY = 0;
+
+    function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${location.host}`);
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'init') {
+        myId = data.id;
+        myColor = data.color;
+        boardSize = data.boardSize;
+        cooldownMs = data.cooldown;
+        board = new Map(data.board);
+      } else if (data.type === 'fullSync') {
+        board = new Map(data.board);
+      }
+    };
+
+    canvas.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      dragStartX = e.clientX - camX;
+      dragStartY = e.clientY - camY;
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        camX = e.clientX - dragStartX;
+        camY = e.clientY - dragStartY;
+      }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      const moved = Math.hypot((e.clientX - dragStartX) - camX, (e.clientY - dragStartY) - camY);
+      isDragging = false;
+      if (moved > 5) return; // Ignore click if user was panning
+
+      const gx = Math.floor((e.clientX - camX) / TILE);
+      const gy = Math.floor((e.clientY - camY) / TILE);
+      const clickedPiece = board.get(`${gx},${gy}`);
+
+      if (clickedPiece && clickedPiece.ownerId === myId) {
+        selected = { x: gx, y: gy };
+      } else if (selected) {
+        ws.send(JSON.stringify({ type: 'move', fx: selected.x, fy: selected.y, tx: gx, ty: gy }));
+        lastMoveTime = Date.now();
+        selected = null;
+      }
+    });
+
+    function draw() {
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const startCol = Math.max(0, Math.floor(-camX / TILE));
+      const endCol = Math.min(boardSize, Math.ceil((canvas.width - camX) / TILE));
+      const startRow = Math.max(0, Math.floor(-camY / TILE));
+      const endRow = Math.min(boardSize, Math.ceil((canvas.height - camY) / TILE));
+
+      for (let x = startCol; x < endCol; x++) {
+        for (let y = startRow; y < endRow; y++) {
+          ctx.fillStyle = (x + y) % 2 === 0 ? '#2e2e2e' : '#242424';
+          ctx.fillRect(x * TILE + camX, y * TILE + camY, TILE, TILE);
+
+          if (selected && selected.x === x && selected.y === y) {
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.35)';
+            ctx.fillRect(x * TILE + camX, y * TILE + camY, TILE, TILE);
+          }
+
+          const piece = board.get(`${x},${y}`);
+          if (piece) {
+            ctx.fillStyle = piece.color;
+            ctx.beginPath();
+            ctx.arc(x * TILE + camX + TILE/2, y * TILE + camY + TILE/2, TILE * 0.38, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 14px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(piece.type, x * TILE + camX + TILE/2, y * TILE + camY + TILE/2);
+          }
+        }
+      }
+
+      const remaining = Math.max(0, ((cooldownMs - (Date.now() - lastMoveTime)) / 1000)).toFixed(1);
+      statusEl.innerHTML = remaining > 0
+        ? `Cooldown: <span style="color:#ff6b6b">${remaining}s</span>`
+        : `Status: <span style="color:#51cf66">Ready to move!</span>`;
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>
